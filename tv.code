@@ -1,0 +1,1116 @@
+/* switch to -*-C-*- mode please */
+
+static int tn_treefill(TN *tn);
+
+#if defined(TV_TEST)
+
+#if defined(TV_KEYD)
+/*might match by data instead ... but who cares?*/
+static int
+tn_findkey(TN *tn, I32 *at, TnKEY_T key)
+{
+  TN *down;
+  int xa;
+  if (down = TnSUBl(tn,0)) {
+    if (tn_findkey(down, at, key)) return 1;
+  }
+  for (xa=0; xa < TnFILL(tn); xa++) {
+    if (TnKEY(tn,xa) == key) return 1;
+    *at += 1;
+    if (down = TnSUBr(tn,xa)) {
+      if (tn_findkey(down, at, key)) return 1;
+    }
+  }
+  return 0;
+}
+#endif
+
+void *
+tvmalloc(size_t size)
+{
+  void *ptr;
+  if ((long)size < 0) TV_PANIC("panic: malloc");
+  ptr = malloc(size?size:1);
+  if (ptr != 0) {
+    memset(ptr, 0x69, size);
+    return ptr;
+  } else {
+    TV_PANIC("out of memory!");
+  }
+}
+
+/* attempt to reconcile all overlapping information */
+static int
+tn_happy(TN *tn)
+{
+#if defined(TV_CACHE_TREEFILL)
+  int xa;
+  for (xa=0; xa <= TnFILL(tn); xa++) {
+    if (TnSUBl(tn,xa)) {
+      if (!tn_happy(TnSUBl(tn,xa))) return 0;
+    }
+  }
+  if (TnTREEFILL(tn) != tn_treefill(tn)) {
+    warn("TN(%p) treefill mismatch %d", tn, TnTREEFILL(tn));
+    return 0;
+  }
+#endif
+  return 1;
+}
+
+static int
+tv_happy(XPVTV *tv)
+{
+  TN *root = TvROOT(tv);
+  if (root) {
+    if (!tn_happy(root)) {
+      tv_dump(tv);
+      return 0;
+    }
+    if (TvFILL(tv) != tn_treefill(root)) {
+      tv_dump(tv);
+      return 0;
+    }
+  } else {
+    if (TvMAX(tv) != 0) return 0;
+  }
+  return 1;
+}
+
+static int
+tc_happy(XPVTC *tc)
+{
+  XPVTV *tv = TcTV(tc);
+  int xa;
+  if (!tv_happy(tv)) return 0;
+  
+  if (TvEMPTY(tv)) {
+    if (TcMATCH(tc)) return 0;
+    if (TcFILL(tc)!=0) return 0;
+    if (TcFORWARD(tc) && !TcSTART(tc)) {
+      return 0;
+    }
+    if (!TcFORWARD(tc) && !TcEND(tc)) return 0;
+  }
+  /* basic START & END check */
+  if (TcSTART(tc) && TcEND(tc)) {
+    warn("both START and END set");
+    return 0;
+  }
+  if (TcFILL(tc)) {
+    if (TcSTART(tc)) { tc_dump(tc); warn("!TcSTART"); return 0; }
+    if (TcEND(tc)) { warn("!TcEND"); return 0; }
+  }
+#if defined(TV_CACHE_TREEFILL)
+  /* does TcPOS match START & END state? */
+  if (!TcFILL(tc)) {
+    if (TcPOS(tc) != -1 && TcPOS(tc) != TvFILL(tv)) {
+      warn("pos should be at start or end");
+      return 0;
+    }
+    if (TcPOS(tc)==-1 && !TcSTART(tc)) { warn("TcSTART"); return 0; }
+    if (TcPOS(tc)==TvFILL(tv) && !TcEND(tc)) { warn("TcEND"); return 0; }
+  }
+#if defined(TV_KEYD)
+  /* does TcPOS match cursor? */
+  if (TcFILL(tc) && TcMATCH(tc)) {
+    I32 pos=0;
+    int slot = TcSLOTx(tc);
+    if (!TcMATCH(tc)) {
+      if (slot == -1) slot++;
+      if (slot == TnFILL(TcTNx(tc))) slot--;
+    }
+    tn_findkey(TvROOT(tv), &pos, TnKEY(TcTNx(tc),slot));
+    if (TcPOS(tc) != pos) {
+      tv_dump(tv);
+      tc_dump(tc);
+      warn("pos misplace at %d instead of %d", TcPOS(tc), pos);
+      return 0;
+    }
+  } else {
+    /* pos doesn't matter */
+  }
+#endif
+#endif
+  /* left right flags */
+  if (TcFILL(tc)) {
+    for (xa=0; xa < TcFILL(tc)-1; xa++) {
+      TCE *ce = TcCE(tc, xa);
+      TN *at = TcTN(tc,xa);
+      int slot = TcSLOT(tc,xa);
+      if (TnSUBl(at, slot) == TcTN(tc,xa+1) && (!CeLEFT(ce) || CeRIGHT(ce))) {
+	tv_dump(tv);
+	tc_dump(tc);
+	warn("LEFT right");
+	return 0;
+      }
+      if (TnSUBr(at, slot) == TcTN(tc,xa+1) && (!CeRIGHT(ce) || CeLEFT(ce))) {
+	tv_dump(tv);
+	tc_dump(tc);
+	warn("left RIGHT");
+	return 0;
+      }
+    }
+  }
+  /* slot bounds check */
+  if (!TcMATCH(tc)) {
+    for (xa=0; xa < TcFILL(tc); xa++) {
+      TN *at = TcTN(tc,xa);
+      int slot = TcSLOT(tc,xa);
+      if ((xa <  TcFILL(tc)-1 && (slot < 0 || slot > TnFILL(at)-1)) ||
+	  (xa == TcFILL(tc)-1 && (slot < -1 || slot > TnFILL(at)-1))) {
+	tv_dump(tv);
+	warn("cursor level %d out of range", xa);
+	tc_dump(tc);
+	return 0;
+      }
+    }
+  } else { /*if TcMATCH*/
+    if (!TcFILL(tc)) return 0;
+    for (xa=0; xa < TcFILL(tc); xa++) {
+      TN *at = TcTN(tc,xa);
+      int slot = TcSLOT(tc,xa);
+      if (!(slot >= 0 && slot < TnFILL(at))) {
+	tv_dump(tv);
+	tc_dump(tc);
+	return 0;
+      }
+    }
+  }
+  return 1;
+}
+
+static int
+tn_treefill(TN *tn)
+{
+  TN *down;
+  int xa;
+  int fill=TnFILL(tn);
+  assert(tn);
+  for (xa=0; xa <= TnFILL(tn); xa++) {
+    if (down = TnSUBl(tn, xa)) {
+      fill += tn_treefill(down);
+    }
+  }
+  return fill;
+}
+
+#endif /* TV_TEST */
+
+/* COVERAGE: on */
+/* COVERAGE: jump TV_PANIC END_SCOPE */
+
+/* XPVTV & TN */
+
+static TN *
+init_tn(TN *tn)
+{
+  assert(tn);
+  TnFILL(tn)=0;
+  TnTREEFILL_set(tn,0);
+  return tn;
+}
+
+XPVTV *
+init_tv(XPVTV *tv)
+{
+  assert(tv);
+  assert((TnWIDTH>>1)*2 + 1 == TnWIDTH); /*must be odd*/
+#if defined(TV_TEST)
+  TvFLAGS(tv)=0;
+#endif
+  TvFILL_set(tv,0);
+  TvROOT(tv)=0;
+  TvVERSION(tv)=0;
+  TvASCENDING_on(tv);
+  tv_clear(tv);
+  assert(tv_happy(tv));
+  return tv;
+}
+
+void
+free_tv(XPVTV *tv)
+{
+  assert(tv);
+  tv_clear(tv);
+  FREE_XPVTV(tv);
+}
+
+/* XPVTC & TCE */
+
+static void
+tc_settce(XPVTC *tc, TCE *tce)
+{
+  assert(tc);
+  assert(tce);
+  if (TcPATH(tc)) {
+    FREE_TCE(TcPATH(tc));
+  }
+  TcPATH(tc) = tce;
+}
+
+/* COVERAGE: off */
+/* We cheat here because the perl side isn't finished and doesn't
+do the refcnts properly. */
+
+void
+free_tc(XPVTC *tc)
+{
+  tc_settce(tc,0);
+  assert(TcPATH(tc));
+  FREE_TCE(TcPATH(tc));
+  FREE_XPVTC(tc);
+}
+/* COVERAGE: on */
+
+static void
+tc_extend(XPVTC *tc)
+{
+  TCE *ce2;
+  assert(tc);
+  TcMAX(tc) += 7;		/* cursors already grow exponentially */
+  ce2 = NEW_TCE(tc, TcMAX(tc));
+  Copy(TcPATH(tc), ce2, TcFILL(tc), TCE);
+  tc_settce(tc, ce2);
+}
+
+static void
+tc_reset(XPVTC *tc, I32 xto)
+{
+  XPVTV *tv = TcTV(tc);
+  assert(tc);
+  TcMATCH_off(tc);
+  TcVERSION(tc) = TvVERSION(tv);
+  TcFILL(tc) = 0;
+  TcSTARTEND_off(tc);
+  if (xto >= TvFILL(tv)) {
+    TcEND_on(tc);
+    TcPOS_set(tc, TvFILL(tv));
+    TcFORWARD_off(tc);
+  } else {
+    TcSTART_on(tc);
+    TcPOS_set(tc, -1);
+    TcFORWARD_on(tc);
+  }
+  assert(tc_happy(tc));
+}
+
+void
+tc_refocus(XPVTC *tc, XPVTV *tv)
+{
+  assert(tc);
+  assert(tv);
+#if defined(TV_TEST)
+  TcFLAGS(tc) = 0;
+#endif
+  TcTV(tc) = tv;
+  tc_reset(tc,-1);
+}
+
+XPVTC *
+init_tc(XPVTC *tc, XPVTV *tv)
+{
+  assert(tc);
+  assert(tv);
+  TcTV(tc) = tv;
+#if defined(TV_TEST)
+  TcFLAGS(tc) = 0;
+#endif
+  TcMAX(tc) = 7;
+  TcPATH(tc) = 0;
+  tc_settce(tc, NEW_TCE(tc,TcMAX(tc))); /*scale proportional to TvMAX? XXX*/
+  tc_reset(tc,-1);
+  return tc;
+}
+
+/*------- ------- ------- ------- ------- ------- ------- -------*/
+
+#if defined(TV_CACHE_TREEFILL)
+static void
+tc_adjust_treefill(XPVTC *tc, int delta)
+{
+  int lx;
+  assert(tc);
+  for (lx=0; lx < TcFILL(tc); lx++) {
+    TnTREEFILL_inc(TcTN(tc, lx), delta);
+  }
+}
+
+I32
+tc_pos(XPVTC *tc)
+{
+  assert(tc);
+  TcSYNCCHECK(tc);
+  assert(tc_happy(tc));
+  if (TcMATCH(tc)) {
+    return TcPOS(tc);
+  } else if (TcSTART(tc) || TcEND(tc) /*OK*/) {
+    return -1;
+  } else {
+    TV_PANIC("TV: attempt to get the position of an unpositioned cursor");
+  }
+}
+#endif
+
+char *
+tc_where(XPVTC *tc, int *len)
+{
+  assert(tc);
+  assert(len);
+  TcSYNCCHECK(tc);
+  assert(tc_happy(tc));
+  if (TcEND(tc)) {
+    *len=3;
+    return "end";
+  } else if (TcSTART(tc)) {
+    *len=5;
+    return "start";
+  } else {
+    *len=3;
+    return "mid";
+  }
+}
+
+/*
+  key already copied; data already REFCNT_inc
+  key is inserted immediately after slot (-1 .. TnFILL(tn)-1)
+  */
+#if defined(TV_KEYD)
+static int
+tn_insert(U32 *mymax, TN *tn, int slot, TnKEY_T key, TnDATA_T *data)
+#else
+static int
+tn_insert(U32 *mymax, TN *tn, int slot, TnDATA_T *data)
+#endif
+{
+  assert(tn);
+  SCOPE {
+    int xa;
+    if (TnEMPTY(tn)) {
+      assert(slot==-1);
+      TnSETSLOT(tn,0,key,*data,0,0);
+    } else {
+      for (xa=TnFILL(tn)-1; xa > slot; xa--) {
+	TnCOPYSLOTr(tn,xa,/*to*/ tn,xa+1);
+      }
+      TnSETSLOTr(tn,slot+1,key,*data,0);
+    }
+    ++ TnFILL(tn);
+  }
+  /* data neutral node split */
+  if (TnFILL(tn) == TnWIDTH) {
+    /* use rotation to avoid copying second half XXX */
+    TN *left = NEW_TN(tn);
+    TN *right = NEW_TN(tn);
+    int mid = TnWIDTH/2;
+    int xb;
+    for (xb=0; xb < mid; xb++) {
+      TnCOPYSLOTl(tn,xb,/*to*/ left,xb);
+    }
+    TnSUBr(left,mid-1) = TnSUBl(tn,mid);
+    TnFILL(left) = mid;
+    TnTREEFILL_set(left,mid);
+    SCOPE {
+      int xc = 0;
+      for (xb=mid+1; xb < TnWIDTH; xb++, xc++) {
+	TnCOPYSLOTr(tn,xb,/*to*/ right,xc);
+      }
+    }
+    TnSUBl(right,0) = TnSUBr(tn,mid);
+    TnFILL(right) = mid;
+    TnTREEFILL_set(right,mid);
+    TnSETSLOT(tn,0,TnKEY(tn,mid),TnDAT(tn,mid),left,right);
+    TnFILL(tn) = 1;
+    *mymax += TnWIDTH * 2;
+    return 1;
+  } else {
+    return 0;
+  }
+}
+
+/* assumes left-to-right traversal in non-match case */
+#if defined(TV_KEYD)
+void
+tc_insert(XPVTC *tc, TnKEY_T key, TnDATA_T *data)
+#else
+void
+tc_insert(XPVTC *tc, TnDATA_T *data)
+#endif
+{
+  TN *tn;
+  XPVTV *tv;
+
+  assert(tc);
+  TV_PLANT_KEY(key);
+  TV_PLANT_DAT(data);
+  TcSYNCCHECK(tc);
+  assert(tc_happy(tc));
+  tv = TcTV(tc);
+  if (TvEMPTY(tv)) {
+    tn = NEW_TN(tv);
+    TvROOT(tv) = tn;
+    TvMAX(tv) += TnWIDTH;
+#if defined(TV_KEYD)
+    tn_insert(0, tn, -1, key, data);
+#else
+    tn_insert(0, tn, -1, data);
+#endif
+    TnTREEFILL_set(tn,1);
+    TcPOS_set(tc, 0);
+    TcPUSH(tc,tn);
+    TcSLOTx(tc)=0;
+    TcMATCH_on(tc);
+  } else {
+    TCE *ce = TcCEx(tc);
+    int split;
+    tn = CeTN(ce);
+    if (!TcMATCH(tc)) {
+      ++ CeSLOT(ce);
+      TcPOS_inc(tc,1);
+      TcMATCH_on(tc);
+    }
+#if defined(TV_KEYD)
+    split = tn_insert(&TvMAX(tv), tn, CeSLOT(ce)-1, key, data);
+#else
+    split = tn_insert(&TvMAX(tv), tn, CeSLOT(ce)-1, data);
+#endif
+    TcADJUST_TREEFILL(tc, 1);
+    if (split) {
+      int slot = CeSLOT(ce);
+      /* fixup cursor after node split */
+      CeSLOT(ce) = 0;
+      if (slot < TnWIDTH/2) {
+	CeRIGHT_off(ce);
+	CeLEFT_on(ce);
+	TcPUSH(tc,TnSUBl(tn,0));
+	TcSLOTx(tc) = slot;
+      } else if (slot == TnWIDTH/2) {
+      } else {
+	CeLEFT_off(ce);
+	CeRIGHT_on(ce);
+	TcPUSH(tc,TnSUBr(tn,0));
+	TcSLOTx(tc) = slot-1-TnWIDTH/2;
+      }
+    }
+  }
+  TvFILL_inc(tv, 1);
+  ++ TvVERSION(tv);
+  ++ TcVERSION(tc);
+  /* always finish centered at inserted element */
+#ifdef TV_KEYD
+  assert(strEQ(TnKEY(TcTNx(tc),TcSLOTx(tc)), key));
+#endif
+  assert(tc_happy(tc));
+}
+
+void
+tv_insert(XPVTV *tv, TnKEY_T key, TnDATA_T *data)
+{
+  XPVTC *tc;
+  assert(tv);
+  dTVREMOTE(tc,tv);
+  if (!TvEMPTY(tv)) {
+    TV_SETREMOTE(tc,key);
+  }
+  tc_insert(tc, key, data);
+}
+
+static int tn_refill(U32 *mymax, TN *tn, int slot);
+ 
+/* left right-most */
+static void
+tn_refill_l(U32 *mymax, TN *at, TN *to, int toslot)
+{
+  int rx = TnFILL(at)-1;
+  TN *kid;
+  kid = TnSUBr(at,rx);
+  if (kid) {
+    tn_refill_l(mymax, kid, to, toslot);
+    if (TnEMPTY(kid)) {
+      TnFREEr(at,rx);
+      *mymax -= TnWIDTH;
+    }
+  } else {
+    TnCOPYSLOT(at,rx,to,toslot);
+    (void) tn_refill(mymax, at, rx);
+  }
+  TnTREEFILL_inc(at,-1);
+}
+
+/* right left-most */
+static void
+tn_refill_r(U32 *mymax, TN *at, TN *to, int toslot)
+{
+  int lx = 0;
+  TN *kid;
+  kid = TnSUBl(at,lx);
+  if (kid) {
+    tn_refill_r(mymax, kid, to, toslot);
+    if (TnEMPTY(kid)) {
+      TnFREEl(at,lx);
+      *mymax -= TnWIDTH;
+    }
+  } else {
+    TnCOPYSLOT(at,lx,to,toslot);
+    (void) tn_refill(mymax, at, lx);
+  }
+  TnTREEFILL_inc(at,-1);
+}
+
+/* key & data are already deleted; refill slot
+   The nasty recursive case is when you have a chain of
+   left-right subtrees. */
+static int
+tn_refill(U32 *mymax, TN *tn, int slot)
+{
+  TN *kid;
+  if (kid = TnSUBl(tn,slot)) {
+    tn_refill_l(mymax, kid, tn, slot);
+    if (TnEMPTY(kid)) {
+      TnFREEl(tn,slot);
+      *mymax -= TnWIDTH;
+    }
+    return 1;
+  }
+  else if (kid = TnSUBr(tn,slot)) {
+    tn_refill_r(mymax, kid, tn, slot);
+    if (TnEMPTY(kid)) {
+      TnFREEr(tn,slot);
+      *mymax -= TnWIDTH;
+    }
+    return 0;
+  } else {
+    int xa;
+    for (xa=slot+1; xa < TnFILL(tn); xa++) {
+      TnCOPYSLOTr(tn,xa,/*to*/ tn,xa-1);
+    }
+    -- TnFILL(tn);
+    return 0;
+  }
+}
+
+void
+tc_delete(XPVTC *tc)
+{
+  XPVTV *tv;
+  TN *tn;
+  int slot;
+  int left;
+
+  assert(tc);
+  if (!TcMATCH(tc)) {
+    return;
+  }
+  TcSYNCCHECK(tc);
+  assert(tc_happy(tc));
+  tv = TcTV(tc);
+  tn = TcTNx(tc);
+  slot = TcSLOTx(tc);
+  TV_UPROOT_KEY(TnKEY(tn,slot));
+  TV_UPROOT_DAT(TnDAT(tn,slot));
+  left = tn_refill(&TvMAX(tv), tn, slot);
+  TcADJUST_TREEFILL(tc, -1);
+  TvFILL_inc(tv, -1);
+  if (TnEMPTY(tn)) {
+    TcPOP(tc);
+    TvMAX(tv) -= TnWIDTH;
+    if (TcFILL(tc)) {
+      TCE *ce = TcCEx(tc);
+      TN *mom = CeTN(ce);
+      slot = CeSLOT(ce);
+      if (TnSUBl(mom,slot) == tn) {
+	TnFREEl(mom,slot);
+      } else {
+	assert(TnSUBr(mom,slot) == tn);
+	TnFREEr(mom,slot);
+	++left;
+      }
+    } else {
+      TvFREEROOT(tv);
+      TcPOS_inc(tc,-1);
+      TcMATCH_off(tc);
+      TcSTART_on(tc);
+    }
+  } else {
+    if (slot == TnFILL(tn)) {
+      -- TcSLOTx(tc);
+      ++left;
+    }
+  }
+  if (left) {
+    assert(left==1);
+    TcPOS_inc(tc,-1);
+    CeLEFT_on(TcCEx(tc));
+    tc_step(tc,1);
+  }
+  ++ TvVERSION(tv);
+  ++ TcVERSION(tc);
+  assert(tc_happy(tc));
+}
+
+void
+tv_delete(XPVTV *tv, TnKEY_T key)
+{
+  XPVTC *tc;
+  assert(tv);
+  dTVREMOTE(tc,tv);
+  if (TvEMPTY(tv)) {
+    return;
+  }
+  TV_SETREMOTE(tc,key);
+  tc_delete(tc);
+}
+
+int
+tv_fetch(XPVTV *tv, TnKEY_T key, TnDATA_T *out)
+{
+  TnKEY_T got;
+  XPVTC *tc;
+  assert(tv);
+  dTVREMOTE(tc,tv);
+  if (TvEMPTY(tv)) {
+    return 0;
+  }
+  TV_SETREMOTE(tc,key);
+  if (!TcMATCH(tc)) {
+    return 0;
+  }
+  got = tc_fetch(tc, out);
+#if defined(TV_TEST)
+  assert(strEQ(key, got));
+#endif
+  return 1;
+}
+
+static void
+tn_clear(TN *tn)
+{
+  int xa;
+  for (xa=0; xa <= TnFILL(tn); xa++) {
+    TN *down = TnSUBl(tn,xa);
+    if (down) {
+      tn_clear(down);
+      TnFREEl(tn,xa);
+    }
+  }
+}
+
+void
+tv_clear(XPVTV *tv)
+{
+  assert(tv);
+  if (!TvEMPTY(tv)) {
+    tn_clear(TvROOT(tv));
+    TvFREEROOT(tv);
+  }
+  TvMAX(tv)=0;
+  TvFILL_set(tv,0);
+  ++ TvVERSION(tv);
+  assert(tv_happy(tv));
+}
+
+void
+tc_moveto(XPVTC *tc, I32 xto)
+{
+  XPVTV *tv = TcTV(tc);
+  TCE *ce;
+  TN *tn, *down;
+  int xa;
+  int cur;
+  int tree;
+
+  assert(tc);
+  tc_reset(tc, xto);
+  if (xto < 0 || xto >= TvFILL(tv) /*OK*/) {
+    return;
+  }
+#if defined(TV_CACHE_TREEFILL)
+  cur=0;
+  TcPUSH(tc, TvROOT(tv));
+  
+  /* also search right to left?  probably not?  XXX */
+ DOWN:
+  ce = TcCEx(tc);
+  tn = CeTN(ce);
+  tree=0;
+  if (down = TnSUBl(CeTN(ce),0)) {
+    tree = TnTREEFILL(down);
+    if (xto < cur + tree) {
+      CeSLOT(ce) = 0;
+      CeLEFT_on(ce);
+      TcPUSH(tc, down);
+      goto DOWN;
+    }
+  }
+  cur += tree;
+  for (xa=0; xa < TnFILL(tn); xa++) {
+    if (xto == cur) {
+      CeSLOT(ce) = xa;
+      break;
+    }
+    ++cur;
+    if (down = TnSUBr(CeTN(ce),xa)) {
+      tree = TnTREEFILL(down);
+      assert(xto < cur + tree);
+      CeSLOT(ce) = xa;
+      CeRIGHT_on(ce);
+      TcPUSH(tc, down);
+      goto DOWN;
+    }
+  }
+  /* done, update cursor state */
+  TcPOS(tc)=cur;
+  TcMATCH_on(tc);
+  assert(tc_happy(tc));
+  END_SCOPE
+#else /* TV_CACHE_TREEFILL */
+  TV_PANIC("TV: attempt to moveto index without TV_CACHE_TREEFILL");
+#endif /* TV_CACHE_TREEFILL */
+}
+
+#if defined(TV_KEYD)
+
+/* walks the tree left to right */
+int
+tc_seek(XPVTC *tc, TnKEY_T key)
+{
+  TCE *ce;
+  TN *tn;
+  int xa;
+  int done=0;
+  int ascending;
+
+  assert(tc);
+  tc_reset(tc, -1);
+  tn = TvROOT(TcTV(tc));
+  if (!tn) {
+    return 0;
+  }
+  TcSTARTEND_off(tc);
+  TcPOS_inc(tc,1);
+  TcPUSH(tc, tn);
+  ascending = TvASCENDING(TcTV(tc));
+
+ DOWN:
+  ce = TcCEx(tc);
+  tn = CeTN(ce);
+  for (xa=0; xa < TnFILL(tn); xa++) {
+    TN *left = TnSUBl(tn,xa);
+    int cmp;
+    cmp = TV_KEYCMP(ascending, key, TnKEY(tn,xa));
+    if (cmp < 0) {
+      CeLEFT_on(ce);
+      if (left) {
+	CeSLOT(ce) = xa;
+	TcPUSH(tc, left);
+	goto DOWN;
+      } else {
+	TcPOS_inc(tc,-1);
+	CeSLOT(ce) = xa-1;
+	done=1;
+	break;
+      }
+    }
+    TcPOS_inc(tc, left? TnTREEFILL(left) : 0);
+    if (cmp == 0) {
+      CeSLOT(ce) = xa;
+      done=2;
+      break;
+    }
+    TcPOS_inc(tc, 1);
+  }
+  if (done==0) {
+    xa = TnFILL(tn)-1;
+    CeSLOT(ce) = xa;
+    CeRIGHT_on(ce);
+    if (TnSUBr(tn,xa)) {
+      TcPUSH(tc, TnSUBr(tn,xa));
+      goto DOWN;
+    } else {
+      TcPOS_inc(tc,-1);
+    }
+  }
+  /* done, update cursor state */
+  if (done==2) {
+    TcMATCH_on(tc);
+  }
+  assert(tc_happy(tc));
+  return TcMATCH(tc) != 0;
+}
+
+#endif /* TV_KEYD */
+
+void
+tc_step(XPVTC *tc, I32 delta)
+{
+  assert(tc);
+  TcSYNCCHECK(tc);
+  assert(tc_happy(tc));
+  if (delta==0) {
+    TV_PANIC("TV: cannot step by zero elements");
+  }
+  /* pre-flight check */
+  if (TcFILL(tc)==0) {
+    TN *tn = TvROOT(TcTV(tc));
+    if (!tn) {
+      return;
+    } else if ((TcSTART(tc) && delta < 0) ||
+	       (TcEND(tc)   && delta > 0) /*OK*/) {
+      return;
+    }
+    TcPUSH(tc, tn);
+    TcSLOTx(tc) = delta > 0 ? 0 : TnFILL(tn)-1;
+  } else {
+    if (!TcMATCH(tc)) {
+      TCE *ce = TcCEx(tc);
+      TN *at = CeTN(ce);
+      int slot = CeSLOT(ce);
+      if (delta < 0) {
+	if (slot >= 0 && slot < TnFILL(at)) {
+	  ++delta;		/* we are already at the right place */
+	} else if (slot == -1) {
+	  TcPOS_inc(tc,1);	/* must step, but position is correct */
+	}
+      }
+    }
+  }
+  /* now the actual stepping */
+  TcSTARTEND_off(tc);
+  TcPOS_inc(tc, delta);
+  if (delta > 0) {  /*forward*/
+    if (!TcFORWARD(tc)) {
+      TCE *ce = TcCEx(tc);
+      if (CeRIGHT(ce)) {
+	CeRIGHT_off(ce);
+	CeLEFT_on(ce);
+      }
+      TcFORWARD_on(tc);
+    }
+    do {
+      TCE *ce = TcCEx(tc);
+      TN *down;
+      
+      if (CeSLOT(ce) == 0 && !CeLEFT(ce)) {
+	CeLEFT_on(ce);
+	while (down = TnSUBl(CeTN(ce),0)) {
+	  TcPUSH(tc, down);
+	  ce = TcCEx(tc);
+	  CeSLOT(ce) = 0;
+	  CeLEFT_on(ce);
+	}
+	--delta;
+	continue;
+      }
+      if (!CeRIGHT(ce) && (down = TnSUBr(CeTN(ce),CeSLOT(ce)))) {
+	CeRIGHT_on(ce);
+	CeLEFT_off(ce);
+	TcPUSH(tc, down);
+	TcSLOTx(tc) = 0;
+	continue;
+      } else {
+	++CeSLOT(ce);
+      }
+      --delta;
+      while (CeSLOT(ce) == TnFILL(CeTN(ce))) {
+	TcPOP(tc);
+	if (TcFILL(tc) == 0) {
+	  goto DONE;
+	}
+	ce = TcCEx(tc);
+	if (CeRIGHT(ce)) {
+	  CeRIGHT_off(ce);
+	  ++CeSLOT(ce);
+	}
+      }
+    } while (delta);
+  } else if (delta < 0) {  /*backward*/
+    if (TcFORWARD(tc)) {
+      TCE *ce = TcCEx(tc);
+      if (CeLEFT(ce)) {
+	CeLEFT_off(ce);
+	CeRIGHT_on(ce);
+      }
+      TcFORWARD_off(tc);
+    }
+    do {
+      TCE *ce = TcCEx(tc);
+      int lastx = TnFILL(CeTN(ce))-1;
+      TN *down;
+      
+      if (CeSLOT(ce) == lastx && !CeRIGHT(ce)) {
+	CeRIGHT_on(ce);
+	while (down = TnSUBr(CeTN(ce), lastx)) {
+	  TcPUSH(tc, down);
+	  ce = TcCEx(tc);
+	  lastx = TnFILL(down)-1;
+	  CeSLOT(ce) = lastx;
+	  CeRIGHT_on(ce);
+	}
+	++delta;
+	continue;
+      }
+      if (CeSLOT(ce) >= 0) {
+	if (!CeLEFT(ce) && (down = TnSUBl(CeTN(ce),CeSLOT(ce)))) {
+	  CeLEFT_on(ce);
+	  CeRIGHT_off(ce);
+	  TcPUSH(tc, down);
+	  TcSLOTx(tc) = TnFILL(down)-1;
+	  continue;
+	} else {
+	  --CeSLOT(ce);
+	}
+      }
+      ++delta;
+      while (CeSLOT(ce) == -1) {
+	TcPOP(tc);
+	if (TcFILL(tc) == 0) {
+	  goto DONE;
+	}
+	ce = TcCEx(tc);
+	if (CeLEFT(ce)) {
+	  CeLEFT_off(ce);
+	  --CeSLOT(ce);
+	}
+      }
+    } while (delta);
+  }
+  /* done!  now update state accordingly */
+ DONE:
+  if (TcFILL(tc)) {
+    TcMATCH_on(tc);
+  } else {
+    TcMATCH_off(tc);
+    if (TcFORWARD(tc)) {
+      TcEND_on(tc);
+      TcPOS_set(tc, TvFILL(TcTV(tc)));
+    } else {
+      TcSTART_on(tc);
+      TcPOS_set(tc, -1);
+    }
+  }
+  assert(tc_happy(tc));
+}
+
+TnKEY_T
+tc_fetch(XPVTC *tc, TnDATA_T *out)
+{
+  TN *tn;
+  int slot;
+  assert(tc);
+  if (!TcMATCH(tc)) {
+    return 0;
+  }
+  TcSYNCCHECK(tc);
+  assert(tc_happy(tc));
+  tn = TcTNx(tc);
+  slot = TcSLOTx(tc);
+  *out = TnDAT(tn,slot);
+#ifdef TV_KEYD
+  return TnKEY(tn,slot);
+#else
+  return 1;
+#endif
+}
+
+void
+tc_store(XPVTC *tc, TnDATA_T *data)
+{
+  TN *tn;
+  int slot;
+  assert(tc);
+  if (!TcMATCH(tc)) {
+    TV_PANIC("TV: attempt to store through an unset cursor(0x%p)", tc);
+  }
+  TcSYNCCHECK(tc);
+  assert(tc_happy(tc));
+  tn = TcTNx(tc);
+  slot = TcSLOTx(tc);
+  TV_PLANT_DAT(data);
+  TV_UPROOT_DAT(TnDAT(tn,slot));
+  TnDAT(tn,slot) = *data;
+}
+
+/* COVERAGE: off */
+
+/*todo*/
+
+#ifdef TV_KEYD
+/* binary style XXX */
+void
+tc_bseek(XPVTC *tc, TnKEY_T key)
+{
+}
+#endif
+
+U32
+tc_distance(XPVTC tc1, XPVTC tc2)
+{
+  /*  assert(TcTV(tc1) == TcTV(tc2));*/
+}
+
+#if defined(TV_TEST)
+
+static void
+tn_dump(TN *tn, int tcslot, int level, int myslot)
+{
+  char indent[200];
+  if (level > 190) return;
+  {
+    int xa;
+    for (xa=0; xa < level; xa++) indent[xa] = ' ';
+    indent[xa]=0;
+  }
+  printf("%s%d]TN(0x%p) [%d/%d] slot=%d tree=%d\n", 
+	 indent, myslot, tn, TnFILL(tn), TnWIDTH, tcslot, TnTREEFILL(tn));
+  {
+    int xa;
+    for (xa=0; xa < TnFILL(tn); xa++) {
+      char ctcslot = xa==tcslot? '*':' ';
+      if (level >= 0) {
+	if (TnSUBl(tn,xa)) tn_dump(TnSUBl(tn,xa), -1, level+2, xa);
+	printf("%s%ckey=%s dat='%s' (%p)\n", indent, ctcslot,
+	       TnKEY(tn,xa), TV_DAT_2STRING(TnDAT(tn,xa)), TnDAT(tn,xa));
+	if (TnSUBr(tn,xa)) tn_dump(TnSUBr(tn,xa), -1, level+2, xa+1);
+      } else {
+	printf("%s%ckey=%s dat='%s' left=%x right=%x\n", indent, ctcslot,
+	       TnKEY(tn,xa), TV_DAT_2STRING(TnDAT(tn,xa)),
+	       TnSUBl(tn,xa), TnSUBr(tn,xa));
+      }
+    }
+  }
+}
+
+void
+tv_dump(XPVTV *tv)
+{
+  printf("TV(0x%p) [%d/%d]\n", tv, TvFILL(tv), TvMAX(tv));
+  if (TvEMPTY(tv)) return;
+  tn_dump(TvROOT(tv), -1, 1, 0);
+}
+
+void
+tc_dump(XPVTC *tc)
+{
+  int xa;
+  printf("TC(0x%p) [%d/%d] focus=TV(0x%p) %s at %d\n",
+	 tc, TcFILL(tc), TcMAX(tc), 
+	 TcTV(tc), TcMATCH(tc)?"MATCH":"no match", TcPOSx(tc));
+  for (xa=0; xa < TcFILL(tc); xa++) {
+    TCE *ce = TcPATH(tc) + xa;
+    printf("[%d] = ", xa);
+    if (CeLEFT(ce)) printf("LEFT ");
+    if (CeRIGHT(ce)) printf("RIGHT ");
+    tn_dump(TcTN(tc,xa), TcSLOT(tc,xa), -1, 0);
+  }
+}
+
+#endif
+
+/*
+Copyright (c) 1997 Joshua Nathaniel Pritikin.  All rights reserved.
+
+This package is free software and is provided "as is" without express
+or implied warranty.  It may be used, redistributed and/or modified
+under the terms of the Perl Artistic License (see
+http://www.perl.com/perl/misc/Artistic.html)
+*/
