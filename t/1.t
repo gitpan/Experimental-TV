@@ -1,6 +1,6 @@
 # -*-perl-*- please
 
-BEGIN { print "1..28\n"; }
+BEGIN { print "1..31\n"; }
 END { print "not ok 1\n" if !$test; }
 
 use lib './t';
@@ -119,6 +119,32 @@ sub insert_test {
 	die @done if join('',@done) ne 'aabbcde';
 	$o->clear;
     }
+    ok(1);
+}
+
+sub insert2_test {
+    my $o = shift->new;
+    my $c = $o->new_cursor;
+
+    # keep position & direction across splits?
+    for (1..4) { $c->insert($_,$_); }
+    $c->moveto(3);
+    $c->step(-1);
+    $c->insert(5,5);
+    $c->step(-1);
+    ok($c->pos() == 1);
+
+    $o->clear;
+    $c->moveto(-1);
+    for (1..4) { $c->insert($_,$_); }
+    $c->moveto(2);
+    $c->insert(5,5);
+    $c->step(1);
+    ok($c->pos() == 3);
+
+    # is treecache updated if top node splits?
+    $c->step(-1);
+    for (6..9) { $c->insert($_,$_); }
     ok(1);
 }
 
@@ -333,11 +359,12 @@ sub multi_test {
 
 # should split to multiple files once the coverage analysis is restartible
 
-my $tv = 'Experimental::TV';
+my $tv = 'Experimental::TV::Test';
 
 null_test($tv);
 easy_test($tv);
 insert_test($tv);
+insert2_test($tv);
 cursor_test($tv);
 seek_test($tv);
 delete_test($tv);
@@ -345,4 +372,4 @@ delete_test2($tv);
 moveto_test($tv);
 multi_test($tv);
 
-#Experimental::TV::case_report();
+Experimental::TV::Test::case_report();

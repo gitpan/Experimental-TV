@@ -4,6 +4,10 @@ TYPEMAP
 
 test_XPVTV *			O_OBJECT
 test_XPVTC *			O_OBJECT
+hvXPVTV *			O_OBJECT
+hvXPVTC *			O_OBJECT
+avXPVTV *			O_OBJECT
+avXPVTC *			O_OBJECT
 
 ######################################################################
 

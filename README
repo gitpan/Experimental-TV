@@ -10,7 +10,7 @@ b-trees.  It is my humble hope that the package may be of assistance
 in re-designing perl's built-in collection types and fixing their tie
 interfaces.
 
-The reasons for another btree implementation are as follows:
+The reasons for another b-tree implementation are as follows:
 
 - Publically available code is the best tested.  Buggy b-trees are
 completely unacceptable.  This module includes test coverage analysis.

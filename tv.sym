@@ -7,6 +7,15 @@ NEW_TN
 NEW_XPVTC
 NEW_XPVTV
 TCE
+TC_DECLARE_MYTV
+TC_INIT_MYTV
+TC_SET_TV
+TC_UNSET_TV
+TCptv_END
+TCptv_FORWARD
+TCptv_MATCH
+TCptv_START
+TcTV_T
 TN
 TV_CACHE_TREEFILL
 TV_DAT_2STRING
@@ -19,12 +28,15 @@ TV_PLANT_KEY
 TV_TEST
 TV_UPROOT_DAT
 TV_UPROOT_KEY
+TVptr_ASCENDING
+TcFLAGS
 TcTV
 TnDATA_T
 TnKEY_T
 TnTREEFILL
 TnWIDTH
 TvFILL
+TvFLAGS
 TvMAX
 TvROOT
 XPVTC
@@ -38,13 +50,12 @@ struct tce
 struct tn
 struct xpvtc
 struct xpvtv
-tc_delete
-tc_insert
 tc_bseek
+tc_delete
 tc_distance
-tv_test_malloc
 tc_dump
 tc_fetch
+tc_insert
 tc_moveto
 tc_pos
 tc_refocus
@@ -57,11 +68,5 @@ tv_delete
 tv_dump
 tv_fetch
 tv_insert
-TvFLAGS
-TVptr_ASCENDING
-TcFLAGS
-TCptv_MATCH
-TCptv_FORWARD
-TCptv_START
-TCptv_END
+tv_test_malloc
 tvmalloc

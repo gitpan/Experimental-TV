@@ -9,33 +9,11 @@ require AutoLoader;
 
 @ISA = qw(Exporter DynaLoader);
 @EXPORT = qw();
-$VERSION = '0.00';
+$VERSION = '0.01';
 
 bootstrap Experimental::TV $VERSION;
 
-sub keys {
-    my ($o) = @_;
-    my @k;
-    my $c = $o->new_cursor;
-    while (my($k,$v) = $c->each(1)) {
-	push(@k, $k);
-    }
-    @k;
-}
-
-sub values {
-    my ($o) = @_;
-    my @v;
-    my $c = $o->new_cursor;
-    while (my($k,$v) = $c->each(1)) {
-	push(@v, $v);
-    }
-    @v;
-}
-
-# add tie interfaces
-
-
+require Experimental::TV::Test;
 
 1;
 __END__
@@ -46,7 +24,11 @@ Experimental::TV - Perl Extension to Implement B-Trees
 
 =head1 SYNOPSIS
 
-  use Experimental::TV;
+  1. tvgen.pl -p <prefix>
+
+  2. edit <prefix>tv.tmpl
+
+  3. link into your code
 
 =head1 DESCRIPTION
 
@@ -61,24 +43,27 @@ they do have excellent all-terrain performance.
 
 =head1 CURSOR BEHAVIOR
 
-Keys can only be sorted alphabetically in ascending order.  You can
-always step through them in reverse to emulate descending. XXX
-
 What happens to the cursor on insert/delete:  like shift/unshift.
 
-=head2 What If The Cursor Is Out Of Sync After A Tree Modification?
-
-Both the cursor and the tree store a version number.  If there is
-a mismatch, an exception is thrown.
+What if the cursor is out of sync after a tree modification?  Both the
+cursor and the tree store a version number.  If there is a mismatch,
+an exception is thrown.
 
 Complete cursor behavior ridiculously complicated and cannot easily be
-explained.
+explained.  The function C<tc_happy> in C<tv.code> gives a (hopefully)
+full listing of valid states.
 
-=head1 PERFORMANCE
+=head1 PERFORMANCE TODO
 
-Tune TnWIDTH
+=over 4
 
-tc_bseek, tc_distance, tc_insert rotation
+=item * tune TnWIDTH
+
+=item * tc_bseek
+
+=item * tc_distance (?)
+
+=back
 
 =head1 PUBLIC SOURCE CODE
 

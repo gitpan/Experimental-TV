@@ -2,10 +2,14 @@
 
 static int tn_treefill(TN *tn);
 
+#ifndef TV_TEST
+#undef assert
+#define assert(s)
+#endif
+
 #if defined(TV_TEST)
 
 #if defined(TV_KEYD)
-/*might match by data instead ... but who cares?*/
 static int
 tn_findkey(TN *tn, I32 *at, TnKEY_T key)
 {
@@ -103,6 +107,9 @@ tc_happy(XPVTC *tc)
   }
 #if defined(TV_CACHE_TREEFILL)
   /* does TcPOS match START & END state? */
+  if (TcPOS(tc) == -1 || TcPOS(tc) == TvFILL(tv)) {
+    if (TcMATCH(tc)) { tc_dump(tc); return 0; }
+  }
   if (!TcFILL(tc)) {
     if (TcPOS(tc) != -1 && TcPOS(tc) != TvFILL(tv)) {
       warn("pos should be at start or end");
@@ -168,9 +175,10 @@ tc_happy(XPVTC *tc)
   } else { /*if TcMATCH*/
     if (!TcFILL(tc)) return 0;
     for (xa=0; xa < TcFILL(tc); xa++) {
+      TCE *ce = TcCEx(tc);
       TN *at = TcTN(tc,xa);
       int slot = TcSLOT(tc,xa);
-      if (!(slot >= 0 && slot < TnFILL(at))) {
+      if (!(slot >= 0 && slot < TnFILL(at)) || (!CeLEFT(ce) && !CeRIGHT(ce))) {
 	tv_dump(tv);
 	tc_dump(tc);
 	return 0;
@@ -202,21 +210,14 @@ tn_treefill(TN *tn)
 
 /* XPVTV & TN */
 
-static TN *
-init_tn(TN *tn)
-{
-  assert(tn);
-  TnFILL(tn)=0;
-  TnTREEFILL_set(tn,0);
-  return tn;
-}
-
 XPVTV *
 init_tv(XPVTV *tv)
 {
   assert(tv);
   assert((TnWIDTH>>1)*2 + 1 == TnWIDTH); /*must be odd*/
 #if defined(TV_TEST)
+  /* We initialize all the bit anyway, but this makes it easier to
+     debug. */
   TvFLAGS(tv)=0;
 #endif
   TvFILL_set(tv,0);
@@ -250,8 +251,8 @@ tc_settce(XPVTC *tc, TCE *tce)
 }
 
 /* COVERAGE: off */
-/* We cheat here because the perl side isn't finished and doesn't
-do the refcnts properly. */
+/* We can't really test this anyway because TC_UNSET_TV will probably
+   be customized. */
 
 void
 free_tc(XPVTC *tc)
@@ -259,8 +260,10 @@ free_tc(XPVTC *tc)
   tc_settce(tc,0);
   assert(TcPATH(tc));
   FREE_TCE(TcPATH(tc));
+  TC_UNSET_TV(tc);
   FREE_XPVTC(tc);
 }
+
 /* COVERAGE: on */
 
 static void
@@ -280,6 +283,7 @@ tc_reset(XPVTC *tc, I32 xto)
   XPVTV *tv = TcTV(tc);
   assert(tc);
   TcMATCH_off(tc);
+  TcSTARTEND_off(tc);
   TcVERSION(tc) = TvVERSION(tv);
   TcFILL(tc) = 0;
   TcSTARTEND_off(tc);
@@ -296,24 +300,25 @@ tc_reset(XPVTC *tc, I32 xto)
 }
 
 void
-tc_refocus(XPVTC *tc, XPVTV *tv)
+tc_refocus(XPVTC *tc, TcTV_T tv)
 {
   assert(tc);
-  assert(tv);
 #if defined(TV_TEST)
   TcFLAGS(tc) = 0;
 #endif
-  TcTV(tc) = tv;
+  TC_SET_TV(tc,tv);
   tc_reset(tc,-1);
 }
 
 XPVTC *
-init_tc(XPVTC *tc, XPVTV *tv)
+init_tc(XPVTC *tc, TcTV_T tv)
 {
   assert(tc);
-  assert(tv);
-  TcTV(tc) = tv;
-#if defined(TV_TEST)
+  TC_INIT_MYTV(tc);
+  TC_SET_TV(tc,tv);
+#ifdef TV_TEST
+  /* We initialize all the bit anyway, but this makes it easier to
+     debug. */
   TcFLAGS(tc) = 0;
 #endif
   TcMAX(tc) = 7;
@@ -376,13 +381,14 @@ tc_where(XPVTC *tc, int *len)
   key is inserted immediately after slot (-1 .. TnFILL(tn)-1)
   */
 #if defined(TV_KEYD)
-static int
+static TN *
 tn_insert(U32 *mymax, TN *tn, int slot, TnKEY_T key, TnDATA_T *data)
 #else
-static int
+static TN *
 tn_insert(U32 *mymax, TN *tn, int slot, TnDATA_T *data)
 #endif
 {
+  /* try memmove? XXX */
   assert(tn);
   SCOPE {
     int xa;
@@ -397,32 +403,34 @@ tn_insert(U32 *mymax, TN *tn, int slot, TnDATA_T *data)
     }
     ++ TnFILL(tn);
   }
-  /* data neutral node split */
+  /* data neutral node split: counter-clockwise rotation */
   if (TnFILL(tn) == TnWIDTH) {
-    /* use rotation to avoid copying second half XXX */
-    TN *left = NEW_TN(tn);
-    TN *right = NEW_TN(tn);
+    TN *mom = (TN*) NEW_TN(tn);
+    TN *left = tn;
+    TN *right = (TN*) NEW_TN(tn);
     int mid = TnWIDTH/2;
-    int xb;
-    for (xb=0; xb < mid; xb++) {
-      TnCOPYSLOTl(tn,xb,/*to*/ left,xb);
-    }
-    TnSUBr(left,mid-1) = TnSUBl(tn,mid);
-    TnFILL(left) = mid;
-    TnTREEFILL_set(left,mid);
+    int moved=0;
+    TnSETSLOT(mom,0,TnKEY(tn,mid),TnDAT(tn,mid),left,right);
+    TnFILL(mom) = 1;
+    TnTREEFILL_set(mom,TnTREEFILL(tn)); /*fixed later*/
+    TnTREEFILL_set(right,0);
     SCOPE {
-      int xc = 0;
-      for (xb=mid+1; xb < TnWIDTH; xb++, xc++) {
-	TnCOPYSLOTr(tn,xb,/*to*/ right,xc);
+      int xb, xc;
+      for (xb=mid+1, xc=0; xb < TnWIDTH; xb++, xc++) {
+	TnCOPYSLOTr(left,xb,/*to*/ right,xc);
+	if (TnSUBr(right,xc)) {
+	  moved += TnTREEFILL(TnSUBr(right,xc));
+	}
       }
     }
     TnSUBl(right,0) = TnSUBr(tn,mid);
+    moved += TnSUBl(right,0)? TnTREEFILL(TnSUBl(right,0)) : 0;
+    TnTREEFILL_set(right,moved+mid);
+    TnTREEFILL_inc(left,-(moved+mid));
     TnFILL(right) = mid;
-    TnTREEFILL_set(right,mid);
-    TnSETSLOT(tn,0,TnKEY(tn,mid),TnDAT(tn,mid),left,right);
-    TnFILL(tn) = 1;
+    TnFILL(left) = mid;
     *mymax += TnWIDTH * 2;
-    return 1;
+    return mom;
   } else {
     return 0;
   }
@@ -448,6 +456,7 @@ tc_insert(XPVTC *tc, TnDATA_T *data)
   tv = TcTV(tc);
   if (TvEMPTY(tv)) {
     tn = NEW_TN(tv);
+    TnFILL(tn)=0;
     TvROOT(tv) = tn;
     TvMAX(tv) += TnWIDTH;
 #if defined(TV_KEYD)
@@ -460,13 +469,15 @@ tc_insert(XPVTC *tc, TnDATA_T *data)
     TcPUSH(tc,tn);
     TcSLOTx(tc)=0;
     TcMATCH_on(tc);
+    TcFORWARD_on(tc);
+    CeLEFT_on(TcCEx(tc));
   } else {
     TCE *ce = TcCEx(tc);
-    int split;
+    TN *split;
     tn = CeTN(ce);
     if (!TcMATCH(tc)) {
-      ++ CeSLOT(ce);
       TcPOS_inc(tc,1);
+      ++ CeSLOT(ce);
       TcMATCH_on(tc);
     }
 #if defined(TV_KEYD)
@@ -474,22 +485,47 @@ tc_insert(XPVTC *tc, TnDATA_T *data)
 #else
     split = tn_insert(&TvMAX(tv), tn, CeSLOT(ce)-1, data);
 #endif
-    TcADJUST_TREEFILL(tc, 1);
-    if (split) {
-      int slot = CeSLOT(ce);
-      /* fixup cursor after node split */
+    if (!split) {
+      TcADJUST_TREEFILL(tc, 1);
+    } else {
+      /* re-attach post-split sub-tree */
+      int slot = CeSLOT(ce); /*stash insert location*/
+      TcPOP(tc);
+      if (TcFILL(tc)==0) {
+	TvROOT(tv) = split;
+      } else {
+	TCE *mom = TcCEx(tc);
+	if (CeLEFT(mom)) {
+	  assert(TnSUBl(CeTN(mom), CeSLOT(mom)) == tn);
+	  TnSUBl(CeTN(mom), CeSLOT(mom)) = split;
+	} else {
+	  assert(TnSUBr(CeTN(mom), CeSLOT(mom)) == tn);
+	  TnSUBr(CeTN(mom), CeSLOT(mom)) = split;
+	}
+      }
+      TcPUSH(tc, split);
+      TcADJUST_TREEFILL(tc, 1);
+      ce = TcCEx(tc);
       CeSLOT(ce) = 0;
+      /* fixup cursor to point to the inserted slot */
       if (slot < TnWIDTH/2) {
 	CeRIGHT_off(ce);
 	CeLEFT_on(ce);
-	TcPUSH(tc,TnSUBl(tn,0));
+	TcPUSH(tc,TnSUBl(split,0));
 	TcSLOTx(tc) = slot;
+	ce = TcCEx(tc);
       } else if (slot == TnWIDTH/2) {
       } else {
 	CeLEFT_off(ce);
 	CeRIGHT_on(ce);
-	TcPUSH(tc,TnSUBr(tn,0));
+	TcPUSH(tc,TnSUBr(split,0));
 	TcSLOTx(tc) = slot-1-TnWIDTH/2;
+	ce = TcCEx(tc);
+      }
+      if (TcFORWARD(tc)) {
+	CeLEFT_on(ce);
+      } else {
+	CeRIGHT_on(ce);
       }
     }
   }
@@ -503,16 +539,20 @@ tc_insert(XPVTC *tc, TnDATA_T *data)
   assert(tc_happy(tc));
 }
 
+/* minimize usage of TcTV XXX */
+
 void
-tv_insert(XPVTV *tv, TnKEY_T key, TnDATA_T *data)
+tv_insert(TcTV_T tv, TnKEY_T key, TnDATA_T *data)
 {
   XPVTC *tc;
-  assert(tv);
   dTVREMOTE(tc,tv);
-  if (!TvEMPTY(tv)) {
-    TV_SETREMOTE(tc,key);
-  }
+  TV_SETREMOTE(tc,key);
+  END_SCOPE
+#ifdef TV_KEYD
   tc_insert(tc, key, data);
+#else
+  tc_insert(tc, data);
+#endif
 }
 
 static int tn_refill(U32 *mymax, TN *tn, int slot);
@@ -649,37 +689,26 @@ tc_delete(XPVTC *tc)
 }
 
 void
-tv_delete(XPVTV *tv, TnKEY_T key)
+tv_delete(TcTV_T tv, TnKEY_T key)
 {
   XPVTC *tc;
-  assert(tv);
   dTVREMOTE(tc,tv);
-  if (TvEMPTY(tv)) {
-    return;
-  }
   TV_SETREMOTE(tc,key);
   tc_delete(tc);
 }
 
 int
-tv_fetch(XPVTV *tv, TnKEY_T key, TnDATA_T *out)
+tv_fetch(TcTV_T tv, TnKEY_T key, TnDATA_T *out)
 {
   TnKEY_T got;
   XPVTC *tc;
-  assert(tv);
   dTVREMOTE(tc,tv);
-  if (TvEMPTY(tv)) {
-    return 0;
-  }
   TV_SETREMOTE(tc,key);
-  if (!TcMATCH(tc)) {
-    return 0;
-  }
   got = tc_fetch(tc, out);
-#if defined(TV_TEST)
-  assert(strEQ(key, got));
+#if defined(TV_TEST) && defined(TV_KEYD)
+  assert(!got || strEQ(key, got));
 #endif
-  return 1;
+  return got != 0;
 }
 
 static void
@@ -724,11 +753,12 @@ tc_moveto(XPVTC *tc, I32 xto)
   if (xto < 0 || xto >= TvFILL(tv) /*OK*/) {
     return;
   }
+  assert(TcFORWARD(tc));
 #if defined(TV_CACHE_TREEFILL)
   cur=0;
   TcPUSH(tc, TvROOT(tv));
   
-  /* also search right to left?  probably not?  XXX */
+  /* right to left might be faster when xto > TvFILL(tv)/2 : someday */
  DOWN:
   ce = TcCEx(tc);
   tn = CeTN(ce);
@@ -746,6 +776,7 @@ tc_moveto(XPVTC *tc, I32 xto)
   for (xa=0; xa < TnFILL(tn); xa++) {
     if (xto == cur) {
       CeSLOT(ce) = xa;
+      CeLEFT_on(ce);
       break;
     }
     ++cur;
@@ -814,6 +845,7 @@ tc_seek(XPVTC *tc, TnKEY_T key)
     TcPOS_inc(tc, left? TnTREEFILL(left) : 0);
     if (cmp == 0) {
       CeSLOT(ce) = xa;
+      CeLEFT_on(ce);
       done=2;
       break;
     }

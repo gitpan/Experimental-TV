@@ -11,17 +11,22 @@ typedef struct xpvtc XPVTC;
   DATA_T           ref        value
 */
 
-/*PUBLIC MACROS*/
-#if !defined(TcTV)
-#define TcTV(tc)		(tc)->xtc_tv
-#endif
-
+/*PUBLIC READONLY MACROS*/
 #define TvMAX(tv)		(tv)->xtv_max
-
-#if defined(TV_CACHE_TREEFILL)
+#ifdef TV_CACHE_TREEFILL
 #define TvFILL(tv)		(TvROOT(tv)? TnTREEFILL(TvROOT(tv)) : 0)
 #else
 #define TvFILL(tv)		(tv)->xtv_fill
+#endif
+
+
+/*DEFAULT TO NULL TERMINATED STRINGS*/
+#if defined(TV_KEYD) && !defined(TnKEY_T)
+#define TnKEY_T			char*
+#define TV_KEYCMP(asc,a,b) \
+	(asc? strcmp(a,b) : strcmp(b,a))
+#define TV_PLANT_KEY(k)		k=strdup(k)
+#define TV_UPROOT_KEY(k)	free(k)
 #endif
 
 
@@ -31,8 +36,10 @@ struct tn {
 #ifdef TV_KEYD
   TnKEY_T	tn_key[TnWIDTH];
 #endif
+
   TnDATA_T	tn_data[TnWIDTH];
   struct tn *	tn_sub [TnWIDTH + 1];  /*subtrees are between the keys*/
+
 #ifdef TV_CACHE_TREEFILL
   I32		tn_treefill;
 #endif
@@ -46,11 +53,15 @@ struct xpvtv {
   TN		*xtv_root;
   U32		xtv_max;
   U32		xtv_version;
+
+#ifndef TvFLAGS
+  U32		xtv_flags;
+#define TvFLAGS(tv)		(tv)->xtv_flags
+#define TVptv_ASCENDING		0x00000001
+#endif
+
 #ifndef TV_CACHE_TREEFILL
   I32		xtv_fill;
-#endif
-#ifdef TV_TEST
-  U32		xtv_flags;
 #endif
 };
 
@@ -60,43 +71,68 @@ struct tce {
   I16		tce_flags;
 };
 
-struct xpvtc {
-#ifdef TV_TEST
-  XPVTV		*xtc_tv;
-  U32		xtc_flags;
+#ifndef TcTV
+/* This is simple, but it ignores any refcnt issues. */
+#define TcTV_T			XPVTV*
+#define TC_DECLARE_MYTV		XPVTV *xtc_tv;
+#define TcTV(tc)		(tc)->xtc_tv
+#define TC_INIT_MYTV(tc)	(tc)->xtc_tv = 0
+#define TC_SET_TV(tc,tv)	TcTV(tc) = tv
+#define TC_UNSET_TV(tc)		TcTV(tc) = 0
 #endif
-  U32		xtc_version;
-  TCE		*xtc_path;
+
+struct xpvtc {
+#ifdef TC_DECLARE_MYTV
+  TC_DECLARE_MYTV
+#endif
+
+#ifndef TcFLAGS
+  U32		xtc_flags;
+#define TcFLAGS(tc)		(tc)->xtc_flags
+#define TCptv_MATCH		0x00000001
+#define TCptv_FORWARD		0x00000002
+#define TCptv_START		0x00000004
+#define TCptv_END		0x00000008
+#endif
+
 #ifdef TV_CACHE_TREEFILL
   I32		xtc_pos;
 #endif
+
+  U32		xtc_version;
+  TCE		*xtc_path;
   I16		xtc_fill;
   I16		xtc_max;
 };
 
-/*XPVTV*/
+#ifndef TnKEY_T
+#define TnKEY_T			I32
+#endif
+
+/*TREE VALUE METHODS*/
 XPVTV *init_tv(XPVTV *tv);
 void free_tv(XPVTV *tv);
 void tv_clear(XPVTV *tv);
-void tv_insert(XPVTV *tv, TnKEY_T key, TnDATA_T *data);
-void tv_delete(XPVTV *tv, TnKEY_T key);
-int tv_fetch(XPVTV *tv, TnKEY_T, TnDATA_T *out);
+void tv_insert(TcTV_T tv, TnKEY_T key, TnDATA_T *data);
+int tv_fetch(TcTV_T tv, TnKEY_T, TnDATA_T *out);
+void tv_delete(TcTV_T tv, TnKEY_T key);
 
-/*XPVTC*/
-/*************************************** TV REFCNTS ARE NOT MY PROBLEM */
-XPVTC *init_tc(XPVTC *tc, XPVTV *tv);
+/*TV REMOTE METHODS*/
+XPVTC *init_tc(XPVTC *tc, TcTV_T tv);
 void free_tc(XPVTC *tc);
-void tc_refocus(XPVTC *tc, XPVTV *tv);
-/*************************************** TV REFCNTS ARE NOT MY PROBLEM */
+void tc_refocus(XPVTC *tc, TcTV_T tv);
 void tc_step(XPVTC *tc, I32 delta);
-#ifdef TV_KEYD
-int tc_seek(XPVTC *tc, TnKEY_T key);
-#endif
 TnKEY_T tc_fetch(XPVTC *tc, TnDATA_T *out);
 void tc_store(XPVTC *tc, TnDATA_T *data);
+#if defined(TV_KEYD)
+int tc_seek(XPVTC *tc, TnKEY_T key);
+void tc_insert(XPVTC *tc, TnKEY_T key, TnDATA_T *data);
+#else
+void tc_insert(XPVTC *tc, TnDATA_T *data);
+#endif
 void tc_delete(XPVTC *tc);
-void tc_moveto(XPVTC *tc, I32 xto);
 char *tc_where(XPVTC *tc, int *len);
+void tc_moveto(XPVTC *tc, I32 xto);  /*crippled without CACHE_TREEFILL */
 #if defined(TV_CACHE_TREEFILL)
 I32 tc_pos(XPVTC *tc);
 #endif
@@ -107,7 +143,7 @@ void tv_dump(XPVTV *tv);
 #endif
 
 
-/*(SEMI)PRIVATE MACROS*/
+/*PRIVATE MACROS MAKING A PUBLIC APPEARANCE*/
 #define TvROOT(tv)		(tv)->xtv_root
 #if defined(TV_CACHE_TREEFILL)
 #define TnTREEFILL(tn)		(tn)->tn_treefill

@@ -281,18 +281,23 @@ go();
 
 __END__;
 
+=head1 SYNOPSIS
+
+  ccovscan.pl code.c > covcode.c
+
 =head1 DESCRIPTION
 
-Scans the C/C++ source (before cpp) and inserts a call at each branch
+Scans the C/C++ source (before cpp) and inserts a call in each block
 to record execution.  Designed to be as simple as possible.
 
 Detects error prone constructs and forces you to rewrite them in a
 simpler form.  Many of these ideas came from study of the highly
-regarded perl5 source code.
+regarded perl5 source code.  (And as a side-effort makes C/C++ easy to
+parse.)
 
-This approach to coverage analysis is NOT fullproof.  Just because you
-exercise every code path does not mean that you have exercised all
-possible states.  For example,
+This approach to coverage analysis is not close to fullproof!  Just
+because you exercise every code path does not mean that you have
+exercised all possible states.  For example,
 
   char
   fetch_char(int xx)
@@ -321,7 +326,16 @@ Turns off coverage instrumentation.
 
 =item * /* COVERAGE: jump myexit croak panic */
 
-Adds to the list of functions that cause a change in execution path.
+Adds to the list of functions that cause a change in execution flow.
+
+=item * ||
+
+If you use || in an C<if> test, you can avoid the warning by adding an
+/*OK*/ comment inside the C<if> expression.
+
+=item * ?:
+
+The ?: operator is not checked.
 
 =back
 

@@ -55,9 +55,7 @@
 	TnSETSLOTr(dn,dx, TnKEY(sn,sx),TnDAT(sn,sx),TnSUBr(sn,sx))
 #define TV_SETREMOTE(tc,key)	tc_seek(tc,key)
 #else
-#define TnKEY_T			I32
-#define TV_KEYCMP(asc,a,b) \
-	(asc? a-b : b-a)
+#define TV_KEYCMP(asc,a,b)
 #define TnKEY(tn,xx)		xx
 #define TnKEY_set(tn,xx,to)
 #define TnSETSLOT(tn,xx,k,d,l,r) \
